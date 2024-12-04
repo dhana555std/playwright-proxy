@@ -209,6 +209,7 @@ async function checkAccessibilityAndSave(page: Page, testInfo: TestInfo, actionN
     })),
   })) || [];
 
+  
   const metadata = {
     testTitle: testInfo?.title,
     describeBlock: testInfo?.titlePath?.slice(0, -1).join(' > ') || "No describe block",
@@ -221,6 +222,8 @@ async function checkAccessibilityAndSave(page: Page, testInfo: TestInfo, actionN
     violations,
   };
 
+  await a11YImagesGenerator(page,accessibilityScanResults);
+
   const outputFileName = `A11y_Report_${actionName}_${Date.now()}.json`;
   const networkFileName = `Network_Report_${actionName}_${Date.now()}.json`;
 
@@ -231,5 +234,16 @@ async function checkAccessibilityAndSave(page: Page, testInfo: TestInfo, actionN
   console.log(`[${metadata.testTitle}] Accessibility report saved: ${outputFileName}`);
 }
 
+async function a11YImagesGenerator(page:Page,accessibilityScanResults:any) {
+  // Optionally take screenshots for violations
+  for (const violation of accessibilityScanResults.violations) {
+      console.log(`Violation: ${violation.id} - ${violation.description}`);
+      for (const node of violation?.nodes) {
+          const target = node.target.join(',');
+          const locator = page.locator(target);
+          await locator.screenshot({ path: `screenshots/axe-${violation.id}.png` });
+      }
+  }
+}
 
 export { test };

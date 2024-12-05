@@ -51,3 +51,6 @@ yarn.lock
 pnpm-lock.yaml
 A11y
 screenshots
+A11y_screenshots
+browser_metrics
+network_calls

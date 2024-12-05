@@ -1,8 +1,10 @@
 import { test as baseTest, Page, Locator,TestInfo  } from '@playwright/test';
 import fs from 'fs/promises';
+import path from 'path';
 import lighthouse from 'lighthouse';
 import { URL } from 'url';
 import AxeBuilder from '@axe-core/playwright';
+import { existsSync } from 'fs';
  // List of allowed methods for page
 const allowedPageMethods = [
   'click',
@@ -67,33 +69,33 @@ function wrapLocatorActions(locator: Locator,testInfo: TestInfo): Locator {
           console.log(`Locator action invoked: ${String(prop)} with args:`, args);
           console.log(`Before executing ${String(prop)} on locator`);
           const domBefore  = String(prop) !== 'goto' ? locator.page().content() : '';  
-          const networkData: { requests: Request[]; responses: Response[] } = { requests: [], responses: [] };
-          const onRequest = (request: Request) => networkData.requests.push(request);
-          const onResponse = (response: Response) => networkData.responses.push(response);
+          let domAfter;
 
+          const networkData: { requests: Request[]} = { requests: []};
+          const onRequest = (request: Request) => networkData.requests.push({
+            url: request.url(),
+            method: request.method(),
+            headers: request.headers(),
+          });
+          
+          
           locator.page().on('request', onRequest);
-          locator.page().on('response', onResponse);
-
+          
           const result = await (originalMethod as Function).apply(target, args);
           console.log(`After executing ${String(prop)} on locator`);
           
-          const domAfter = String(prop) !== 'goto' ? await locator.page().content() : '';
+          domAfter = String(prop) !== 'goto' ? await locator.page().content() : '';
                 // Remove listeners
-            locator.page().off('request', onRequest);
-            locator.page().off('response', onResponse);
+          locator.page().off('request', onRequest);
 
-            // Compare DOM states
-            console.log(
-                domBefore === domAfter
-                ? `DOM state unchanged for ${String(prop)}`
-                : `DOM state changed for ${String(prop)}`
-            );
-
-            // Log network activity
-            console.log(`Network activity for ${String(prop)}:`, networkData.requests.length,networkData.responses.length);   
-          
+          if(domBefore !== domAfter)
+          {
+            await captureNetworkcall(networkData,testInfo);
+          }  
+            
+          await getBrowserPerformanceMetrics(locator.page(),testInfo);
           await checkAccessibilityAndSave(locator.page(),testInfo,String(prop),networkData);
-          // await runLighthouseAudit(locator.page(), testInfo, String(prop));
+          
           return result;
         };
       }
@@ -114,47 +116,47 @@ function wrapPageActions(page: Page,testInfo: TestInfo): Page {
 
           // If the method is in allowedPageMethods, add logging
           if (allowedPageMethods.includes(String(prop))) {
-            console.log(`[${testInfo.title}] Page action: ${String(prop)}, args:`, args);
-            console.log(`Page action invoked: ${String(prop)} with args:`, args);
-            console.log(`Before executing ${String(prop)}`);
+            // console.log(`[${testInfo.title}] Page action: ${String(prop)}, args:`, args);
+            // console.log(`Page action invoked: ${String(prop)} with args:`, args);
+            // console.log(`Before executing ${String(prop)}`);
             
-            const networkData: { requests: Request[]; responses: Response[] } = { requests: [], responses: [] };
-            const onRequest = (request: Request) => networkData.requests.push(request);
-            const onResponse = (response: Response) => networkData.responses.push(response);
+            const networkData: { requests: Request[]} = { requests: []};
+            const onRequest = (request: Request) => networkData.requests.push({
+              url: request.url(),
+              method: request.method(),
+              headers: request.headers(),
+            });
+            //const onResponse = (response: Response) => networkData.responses.push(response);
 
             page.on('request', onRequest);
-            page.on('response', onResponse);
-            
-            // Capture DOM state before the action
-            
             const domBefore  = String(prop) !== 'goto' ? page.content() : '';
-            
+            let domAfter;
             
             if ( result instanceof Promise) {
               result =  result.then(async (res) => {
-                console.log(`After executing ${String(prop)}`);
-                const domAfter = String(prop) !== 'goto' ? await page.content() : '';
-                // Remove listeners
-                page.off('request', onRequest);
-                page.off('response', onResponse);
-
-                // Compare DOM states
-                console.log(
-                    domBefore === domAfter
-                      ? `DOM state unchanged for ${String(prop)}`
-                      : `DOM state changed for ${String(prop)}`
-                  );
+                  console.log(`After executing ${String(prop)}`);
+                  domAfter = String(prop) !== 'goto' ? await page.content() : '';
+                  // Remove listeners
+                  page.off('request', onRequest);
                   
 
-                // Log network activity
-                console.log(`Network activity for ${String(prop)}:`, networkData.requests.length,networkData.responses.length);    
-                await checkAccessibilityAndSave(page,testInfo,String(prop),networkData);
-                // await runLighthouseAudit(page, testInfo, String(prop));
-                return res;
+                  if(domBefore !== domAfter)
+                  {
+                      await captureNetworkcall(networkData,testInfo)
+                  }
+                  // Log network activity
+                  await getBrowserPerformanceMetrics(page,testInfo);
+                  await checkAccessibilityAndSave(page,testInfo,String(prop),networkData);
+                  return res;
               });
             }  else  {
-              console.log(`After executing ${String(prop)}`);
+                  if(domBefore !== domAfter)
+                  {
+                    captureNetworkcall(networkData,testInfo)
+                  }     
+                  getBrowserPerformanceMetrics(page,testInfo);         
                   checkAccessibilityAndSave(page,testInfo,String(prop),networkData);
+                  
                 // runLighthouseAudit(page, testInfo, String(prop));
             }
           }
@@ -182,7 +184,7 @@ function wrapLocatorIfNeeded(obj: any,testInfo:TestInfo): any {
 
 // Extend the base test to include the wrapped page fixture
  const test = baseTest.extend<{
-  page: Page;
+  page: Page
 }>({
   page: async ({ page }, use,testInfo) => {
     const wrappedPage = wrapPageActions(page,testInfo);
@@ -194,7 +196,6 @@ function wrapLocatorIfNeeded(obj: any,testInfo:TestInfo): any {
 
 async function checkAccessibilityAndSave(page: Page, testInfo: TestInfo, actionName: string, networkData: any) {
   const accessibilityScanResults = await new AxeBuilder({ page }).analyze();
-
   // Process violations to remove potential circular references
   const violations = accessibilityScanResults.violations?.map((violation) => ({
     issue: violation.description,
@@ -223,27 +224,112 @@ async function checkAccessibilityAndSave(page: Page, testInfo: TestInfo, actionN
   };
 
   await a11YImagesGenerator(page,accessibilityScanResults);
+  // Ensure the 'browser_metrics' folder exists
+  await ensureMetricsFolder('A11y');
+ 
 
   const outputFileName = `A11y_Report_${actionName}_${Date.now()}.json`;
   const networkFileName = `Network_Report_${actionName}_${Date.now()}.json`;
 
   // Write the files
   await fs.writeFile(`A11y/${outputFileName}`, JSON.stringify(report,null,2));
-  await fs.writeFile(`A11y/${networkFileName}`, JSON.stringify(networkData, null, 2));
-
   console.log(`[${metadata.testTitle}] Accessibility report saved: ${outputFileName}`);
 }
 
 async function a11YImagesGenerator(page:Page,accessibilityScanResults:any) {
   // Optionally take screenshots for violations
-  for (const violation of accessibilityScanResults.violations) {
-      console.log(`Violation: ${violation.id} - ${violation.description}`);
-      for (const node of violation?.nodes) {
-          const target = node.target.join(',');
-          const locator = page.locator(target);
-          await locator.screenshot({ path: `screenshots/axe-${violation.id}.png` });
-      }
+  await ensureMetricsFolder('A11y_screenshots');
+  try {
+    for (const violation of accessibilityScanResults.violations) {
+        console.log(`Violation: ${violation.id} - ${violation.description}`);
+        for (const node of violation?.nodes) {
+            const target = node.target.join(',');
+            const locator = page.locator(target);
+            await locator.screenshot({ path: `A11y_screenshots/axe-${violation.id}.png` });
+        }
+    }
   }
+  catch(err){
+    console.log('Error in screenshot capture',err);
+  }
+}
+
+// Helper function to capture performance metrics and include test info
+async function getBrowserPerformanceMetrics(page: Page, testInfo: TestInfo) {
+  // Capture window.performance data from the browser
+  const performanceData = await page.evaluate(() => {
+    return JSON.stringify(window.performance);
+  });
+  
+  // Get the test name and description, with fallback values if not provided
+  const testName = testInfo.title || 'Unnamed Test';
+  const testDescription = testInfo.description || 'No description provided';
+
+  // Get the test file name and line number
+  const testFileName = testInfo.testFile 
+  ? path.basename(testInfo.testFile, path.extname(testInfo.testFile))
+  : testInfo.titlePath[0] ? testInfo.titlePath[0] : 'test';
+  const lineNumber = testInfo.line || 'Unknown Line';
+
+  // Structure the data to include test info
+  const testData = {
+    testName,
+    testDescription,
+    testFile:testInfo.titlePath[0] ? testInfo.titlePath[0] : '',
+    lineNumber,
+    performanceData: JSON.parse(performanceData),
+  };
+
+  // Ensure the 'browser_metrics' folder exists
+  ensureMetricsFolder('browser_metrics');
+  
+  // Define the file path for saving the JSON file with the required naming convention
+  const filePath = `browser_metrics/${testFileName}_${lineNumber}_browserperformance.json`;
+
+  // Write the performance data to a JSON file
+  await fs.writeFile(filePath, JSON.stringify(testData, null, 2));
+
+  return testData; // Return the structured data if needed for further actions
+}
+
+// Helper function to create the 'browser_metrics' folder if it doesn't exist
+async function ensureMetricsFolder(metricsType: string) {
+  if (!existsSync(metricsType)) {
+    fs.mkdir(metricsType);
+  }
+}
+
+async function  captureNetworkcall(networkData:any,testInfo:TestInfo) {
+   // Get the test name and description, with fallback values if not provided
+   const testName = testInfo.title || 'Unnamed Test';
+   const testDescription = testInfo.description || 'No description provided';
+ 
+   // Safely get the test file name, using the current directory as a fallback
+   const testFileName = testInfo.testFile 
+     ? path.basename(testInfo.testFile, path.extname(testInfo.testFile))
+     : testInfo.titlePath[0] ? testInfo.titlePath[0] : 'test';
+ 
+   const lineNumber = testInfo.line || 'Unknown Line';
+ 
+   // Structure the data to include test info
+   const testData = {
+     testName,
+     testDescription,
+     testFile: testInfo.titlePath[0] ? testInfo.titlePath[0] : 'test file',
+     lineNumber,
+     networkData,
+   };
+ 
+   // Ensure the 'network_calls' folder exists
+   await ensureMetricsFolder('network_calls');
+ 
+   // Define the file path for saving the JSON file with the required naming convention
+   const filePath = `network_calls/${testFileName}_${lineNumber}_networkcalls.json`;
+ 
+   // Write the network data to a JSON file
+   await fs.writeFile(filePath, JSON.stringify(testData, null, 2));
+ 
+   console.log(`Network call data saved to: ${filePath}`);
 }
 
 export { test };

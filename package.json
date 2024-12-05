@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
-  "type": "module", 
+  "type": "module",
   "scripts": {},
   "keywords": [],
   "author": "",
@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@axe-core/playwright": "^4.10.1",
+    "dotenv": "^16.4.7",
     "lighthouse": "^12.2.2"
   }
 }

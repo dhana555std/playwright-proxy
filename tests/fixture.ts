@@ -5,7 +5,9 @@ import lighthouse from 'lighthouse';
 import { URL } from 'url';
 import AxeBuilder from '@axe-core/playwright';
 import { existsSync } from 'fs';
- // List of allowed methods for page
+import * as dotenv from 'dotenv';
+dotenv.config();
+// List of allowed methods for page
 const allowedPageMethods = [
   'click',
   'close',
@@ -88,13 +90,9 @@ function wrapLocatorActions(locator: Locator,testInfo: TestInfo): Locator {
                 // Remove listeners
           locator.page().off('request', onRequest);
 
-          if(domBefore !== domAfter)
-          {
-            await captureNetworkcall(networkData,testInfo);
-          }  
-            
-          await getBrowserPerformanceMetrics(locator.page(),testInfo);
-          await checkAccessibilityAndSave(locator.page(),testInfo,String(prop),networkData);
+          const isDomChanged = domBefore !== domAfter;
+                  
+          await runMetrics(locator.page(),testInfo,String(prop),networkData,isDomChanged);
           
           return result;
         };
@@ -139,23 +137,15 @@ function wrapPageActions(page: Page,testInfo: TestInfo): Page {
                   // Remove listeners
                   page.off('request', onRequest);
                   
-
-                  if(domBefore !== domAfter)
-                  {
-                      await captureNetworkcall(networkData,testInfo)
-                  }
-                  // Log network activity
-                  await getBrowserPerformanceMetrics(page,testInfo);
-                  await checkAccessibilityAndSave(page,testInfo,String(prop),networkData);
+                  const isDomChanged = domBefore !== domAfter;
+                  
+                  await runMetrics(page,testInfo,String(prop),networkData,isDomChanged);
                   return res;
               });
             }  else  {
-                  if(domBefore !== domAfter)
-                  {
-                    captureNetworkcall(networkData,testInfo)
-                  }     
-                  getBrowserPerformanceMetrics(page,testInfo);         
-                  checkAccessibilityAndSave(page,testInfo,String(prop),networkData);
+              const isDomChanged = domBefore !== domAfter;
+                  
+              runMetrics(page,testInfo,String(prop),networkData,isDomChanged);
                   
                 // runLighthouseAudit(page, testInfo, String(prop));
             }
@@ -330,6 +320,25 @@ async function  captureNetworkcall(networkData:any,testInfo:TestInfo) {
    await fs.writeFile(filePath, JSON.stringify(testData, null, 2));
  
    console.log(`Network call data saved to: ${filePath}`);
+}
+
+async function runMetrics(page:Page,testInfo:TestInfo,action:string,networkData:any,isDomChanged:boolean) {
+  console.log(process.env.ENABLE_ACCESSIBILITY)
+    if(isDomChanged && process.env.ENABLE_NETWORK_LOGS == 'true')
+    {
+      await captureNetworkcall(networkData,testInfo);
+    }  
+      
+    if(process.env.ENABLE_ACCESSIBILITY  == 'true')
+    {
+      await checkAccessibilityAndSave(page,testInfo,action,networkData);
+    }
+
+    if(process.env.ENABLE_BROWSER_PERFORMANCE  == 'true')
+    {
+      await getBrowserPerformanceMetrics(page,testInfo);
+    }
+    
 }
 
 export { test };
